@@ -99,15 +99,19 @@ class YouTubeTTS {
   }
 
   toggleTTS(button, commentElement) {
-    // Stop current speech if playing
+    // If this button is currently playing, stop it
+    if (button.classList.contains('tts-playing')) {
+      speechSynthesis.cancel();
+      this.resetAllButtons();
+      this.currentUtterance = null;
+      return;
+    }
+    
+    // Stop any other currently playing speech
     if (this.currentUtterance) {
       speechSynthesis.cancel();
       this.resetAllButtons();
-      
-      // If clicking the same button, just stop
-      if (button.classList.contains('tts-playing')) {
-        return;
-      }
+      this.currentUtterance = null;
     }
 
     // Get comment text
