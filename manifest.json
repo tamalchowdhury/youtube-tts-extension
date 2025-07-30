@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Comment TTS",
+  "version": "1.0.0",
+  "description": "Read YouTube comments out loud with text-to-speech",
+  "permissions": [
+    "activeTab"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["*://www.youtube.com/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_end"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "YouTube Comment TTS"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

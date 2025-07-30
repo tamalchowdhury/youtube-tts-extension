@@ -1,0 +1,53 @@
+/* YouTube Comment TTS Button Styles */
+.tts-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 8px;
+  margin-left: 8px;
+  border-radius: 18px;
+  transition: all 0.2s ease;
+  opacity: 0.7;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 36px;
+}
+
+.tts-button:hover {
+  opacity: 1;
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.tts-button.tts-playing {
+  opacity: 1;
+  background-color: rgba(255, 0, 0, 0.1);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .tts-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* YouTube dark theme support */
+html[dark] .tts-button:hover,
+[dark] .tts-button:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
