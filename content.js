@@ -6,6 +6,8 @@ class YouTubeTTS {
     this.observedComments = new Set();
     this.textNodesMap = []; // Store text nodes and their offsets
     this.currentHighlightSpan = null; // Track current highlight
+    this.currentCommentElement = null; // Track current comment being read
+    this.isCancelling = false; // Track if cancel was user-initiated
     this.init();
   }
 
@@ -109,20 +111,37 @@ class YouTubeTTS {
   toggleTTS(button, commentElement) {
     // If this button is currently playing, stop it
     if (button.classList.contains('tts-playing')) {
+      this.isCancelling = true;
       speechSynthesis.cancel();
       this.resetAllButtons();
-      this.clearHighlight();
+      this.clearAllHighlights();
       this.currentUtterance = null;
+      this.textNodesMap = [];
+      this.currentCommentElement = null;
+      this.isCancelling = false;
       return;
     }
     
     // Stop any other currently playing speech
     if (this.currentUtterance) {
+      this.isCancelling = true;
       speechSynthesis.cancel();
       this.resetAllButtons();
-      this.clearHighlight();
+      this.clearAllHighlights();
       this.currentUtterance = null;
+      this.textNodesMap = [];
+      this.currentCommentElement = null;
+      this.isCancelling = false;
     }
+
+    // Ensure the comment element is still in the DOM
+    if (!document.contains(commentElement)) {
+      console.warn('Comment element not found in DOM');
+      return;
+    }
+
+    // Normalize the comment element's DOM to clean up any residual spans
+    commentElement.normalize();
 
     // Get comment text
     const commentText = this.extractCommentText(commentElement);
@@ -136,8 +155,16 @@ class YouTubeTTS {
     this.currentUtterance.pitch = 1.0;
     this.currentUtterance.volume = 1.0;
 
+    // Store the current comment element
+    this.currentCommentElement = commentElement;
+
     // Map text nodes for highlighting
     this.buildTextNodesMap(commentElement);
+
+    // Verify textNodesMap
+    if (!this.textNodesMap.length) {
+      console.warn('Failed to build textNodesMap for comment');
+    }
 
     // Set up event listeners
     this.currentUtterance.onstart = () => {
@@ -148,32 +175,44 @@ class YouTubeTTS {
 
     this.currentUtterance.onend = () => {
       this.resetAllButtons();
-      this.clearHighlight();
+      this.clearAllHighlights();
       this.currentUtterance = null;
       this.textNodesMap = [];
+      this.currentCommentElement = null;
     };
 
-    this.currentUtterance.onerror = () => {
+    this.currentUtterance.onerror = (event) => {
+      if (!this.isCancelling) {
+        console.error(`TTS Error occurred: ${event.error}`);
+      }
       this.resetAllButtons();
-      this.clearHighlight();
+      this.clearAllHighlights();
       this.currentUtterance = null;
       this.textNodesMap = [];
-      console.error('TTS Error occurred');
+      this.currentCommentElement = null;
     };
 
     // Highlight words during speech
     if ('onboundary' in this.currentUtterance) {
       this.currentUtterance.onboundary = (event) => {
-        if (event.name === 'word') {
+        if (event.name === 'word' && document.contains(commentElement)) {
           this.highlightWord(event.charIndex, event.charLength, commentElement);
+        } else if (!document.contains(commentElement)) {
+          console.warn('Comment element no longer in DOM, stopping highlight');
+          this.isCancelling = true;
+          speechSynthesis.cancel();
+          this.clearAllHighlights();
+          this.isCancelling = false;
         }
       };
     } else {
       console.warn('Word boundary detection not supported in this browser');
     }
 
-    // Speak the comment
-    speechSynthesis.speak(this.currentUtterance);
+    // Speak the comment synchronously
+    if (this.currentUtterance && document.contains(commentElement)) {
+      speechSynthesis.speak(this.currentUtterance);
+    }
   }
 
   extractCommentText(commentElement) {
@@ -208,12 +247,15 @@ class YouTubeTTS {
     this.textNodesMap = [];
     let offset = 0;
 
+    // Normalize to ensure clean DOM
+    commentElement.normalize();
+
     const walker = document.createTreeWalker(
       commentElement,
       NodeFilter.SHOW_TEXT,
       {
         acceptNode: function(node) {
-          if (!node.textContent.trim()) {
+          if (!node.textContent.trim() || node.parentNode.classList.contains('tts-highlight')) {
             return NodeFilter.FILTER_REJECT;
           }
           return NodeFilter.FILTER_ACCEPT;
@@ -225,13 +267,24 @@ class YouTubeTTS {
     while (node = walker.nextNode()) {
       const text = node.textContent;
       this.textNodesMap.push({ node, start: offset, end: offset + text.length });
-      offset += text.length + 1; // Account for space
+      offset += text.length; // No extra space to align with speechSynthesis
+      console.debug(`Mapped node: "${text}" (start: ${offset - text.length}, end: ${offset})`);
     }
   }
 
   highlightWord(charIndex, charLength, commentElement) {
     // Clear previous highlight
-    this.clearHighlight();
+    this.clearAllHighlights();
+
+    // Verify textNodesMap and comment element
+    if (!this.textNodesMap.length || !document.contains(commentElement)) {
+      console.warn('textNodesMap empty or comment not in DOM, rebuilding');
+      this.buildTextNodesMap(commentElement);
+      if (!this.textNodesMap.length) {
+        console.warn('Failed to rebuild textNodesMap');
+        return;
+      }
+    }
 
     // Find the text node containing the current word
     let targetNode = null;
@@ -245,7 +298,10 @@ class YouTubeTTS {
       }
     }
 
-    if (!targetNode) return;
+    if (!targetNode || !document.contains(targetNode)) {
+      console.warn('Target text node not found or not in DOM');
+      return;
+    }
 
     // Split the text node and wrap the word in a span
     const text = targetNode.textContent;
@@ -271,25 +327,27 @@ class YouTubeTTS {
     this.buildTextNodesMap(commentElement);
 
     this.currentHighlightSpan = span;
+    console.debug(`Highlighted word: "${word}" at charIndex: ${charIndex}`);
   }
 
-  clearHighlight() {
-    // Remove existing highlight and restore original text
-    if (this.currentHighlightSpan) {
-      const parent = this.currentHighlightSpan.parentNode;
-      const text = this.currentHighlightSpan.textContent;
-      const textNode = document.createTextNode(text);
-      parent.replaceChild(textNode, this.currentHighlightSpan);
-      this.currentHighlightSpan = null;
-
-      // Normalize to merge adjacent text nodes
-      parent.normalize();
-
-      // Rebuild textNodesMap to ensure consistency
-      const commentElement = parent.closest('#content-text');
-      if (commentElement) {
-        this.buildTextNodesMap(commentElement);
-      }
+  clearAllHighlights() {
+    // Remove all highlight spans in the comments section
+    const commentsSection = document.querySelector('#comments');
+    if (commentsSection) {
+      const highlights = commentsSection.querySelectorAll('.tts-highlight');
+      highlights.forEach((span) => {
+        const parent = span.parentNode;
+        const textNode = document.createTextNode(span.textContent);
+        parent.replaceChild(textNode, span);
+        parent.normalize();
+      });
+    }
+    this.currentHighlightSpan = null;
+    if (this.currentCommentElement && document.contains(this.currentCommentElement)) {
+      this.textNodesMap = [];
+      this.buildTextNodesMap(this.currentCommentElement);
+    } else {
+      this.textNodesMap = [];
     }
   }
 
@@ -311,10 +369,13 @@ class YouTubeTTS {
         
         // Stop any current speech
         if (this.currentUtterance) {
+          this.isCancelling = true;
           speechSynthesis.cancel();
           this.resetAllButtons();
-          this.clearHighlight();
+          this.clearAllHighlights();
           this.currentUtterance = null;
+          this.currentCommentElement = null;
+          this.isCancelling = false;
         }
         
         // Reset observed comments
