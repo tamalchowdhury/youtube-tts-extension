@@ -4,12 +4,20 @@ class YouTubeTTS {
     this.isInitialized = false;
     this.currentUtterance = null;
     this.observedComments = new Set();
+    this.textNodesMap = []; // Store text nodes and their offsets
+    this.currentHighlightSpan = null; // Track current highlight
     this.init();
   }
 
   init() {
     if (this.isInitialized) return;
     
+    // Check if SpeechSynthesis is supported
+    if (!window.speechSynthesis) {
+      console.warn('Text-to-Speech not supported in this browser');
+      return;
+    }
+
     // Wait for page to load and check if we're on a video page
     this.waitForYouTube(() => {
       this.setupCommentObserver();
@@ -103,6 +111,7 @@ class YouTubeTTS {
     if (button.classList.contains('tts-playing')) {
       speechSynthesis.cancel();
       this.resetAllButtons();
+      this.clearHighlight();
       this.currentUtterance = null;
       return;
     }
@@ -111,6 +120,7 @@ class YouTubeTTS {
     if (this.currentUtterance) {
       speechSynthesis.cancel();
       this.resetAllButtons();
+      this.clearHighlight();
       this.currentUtterance = null;
     }
 
@@ -126,6 +136,9 @@ class YouTubeTTS {
     this.currentUtterance.pitch = 1.0;
     this.currentUtterance.volume = 1.0;
 
+    // Map text nodes for highlighting
+    this.buildTextNodesMap(commentElement);
+
     // Set up event listeners
     this.currentUtterance.onstart = () => {
       button.innerHTML = '⏸️';
@@ -135,14 +148,29 @@ class YouTubeTTS {
 
     this.currentUtterance.onend = () => {
       this.resetAllButtons();
+      this.clearHighlight();
       this.currentUtterance = null;
+      this.textNodesMap = [];
     };
 
     this.currentUtterance.onerror = () => {
       this.resetAllButtons();
+      this.clearHighlight();
       this.currentUtterance = null;
+      this.textNodesMap = [];
       console.error('TTS Error occurred');
     };
+
+    // Highlight words during speech
+    if ('onboundary' in this.currentUtterance) {
+      this.currentUtterance.onboundary = (event) => {
+        if (event.name === 'word') {
+          this.highlightWord(event.charIndex, event.charLength, commentElement);
+        }
+      };
+    } else {
+      console.warn('Word boundary detection not supported in this browser');
+    }
 
     // Speak the comment
     speechSynthesis.speak(this.currentUtterance);
@@ -175,6 +203,96 @@ class YouTubeTTS {
     return text.trim();
   }
 
+  buildTextNodesMap(commentElement) {
+    // Build a map of text nodes and their character offsets
+    this.textNodesMap = [];
+    let offset = 0;
+
+    const walker = document.createTreeWalker(
+      commentElement,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode: function(node) {
+          if (!node.textContent.trim()) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      }
+    );
+
+    let node;
+    while (node = walker.nextNode()) {
+      const text = node.textContent;
+      this.textNodesMap.push({ node, start: offset, end: offset + text.length });
+      offset += text.length + 1; // Account for space
+    }
+  }
+
+  highlightWord(charIndex, charLength, commentElement) {
+    // Clear previous highlight
+    this.clearHighlight();
+
+    // Find the text node containing the current word
+    let targetNode = null;
+    let nodeOffset = 0;
+
+    for (const entry of this.textNodesMap) {
+      if (charIndex >= entry.start && charIndex < entry.end) {
+        targetNode = entry.node;
+        nodeOffset = charIndex - entry.start;
+        break;
+      }
+    }
+
+    if (!targetNode) return;
+
+    // Split the text node and wrap the word in a span
+    const text = targetNode.textContent;
+    const before = text.substring(0, nodeOffset);
+    const word = text.substring(nodeOffset, nodeOffset + charLength);
+    const after = text.substring(nodeOffset + charLength);
+
+    const parent = targetNode.parentNode;
+    const span = document.createElement('span');
+    span.className = 'tts-highlight';
+    span.textContent = word;
+
+    // Replace the text node with before + span + after
+    const beforeNode = document.createTextNode(before);
+    const afterNode = document.createTextNode(after);
+    parent.insertBefore(beforeNode, targetNode);
+    parent.insertBefore(span, targetNode);
+    parent.insertBefore(afterNode, targetNode);
+    parent.removeChild(targetNode);
+
+    // Update textNodesMap to reflect new structure
+    this.textNodesMap = [];
+    this.buildTextNodesMap(commentElement);
+
+    this.currentHighlightSpan = span;
+  }
+
+  clearHighlight() {
+    // Remove existing highlight and restore original text
+    if (this.currentHighlightSpan) {
+      const parent = this.currentHighlightSpan.parentNode;
+      const text = this.currentHighlightSpan.textContent;
+      const textNode = document.createTextNode(text);
+      parent.replaceChild(textNode, this.currentHighlightSpan);
+      this.currentHighlightSpan = null;
+
+      // Normalize to merge adjacent text nodes
+      parent.normalize();
+
+      // Rebuild textNodesMap to ensure consistency
+      const commentElement = parent.closest('#content-text');
+      if (commentElement) {
+        this.buildTextNodesMap(commentElement);
+      }
+    }
+  }
+
   resetAllButtons() {
     document.querySelectorAll('.tts-button').forEach(btn => {
       btn.innerHTML = '🔊';
@@ -194,11 +312,14 @@ class YouTubeTTS {
         // Stop any current speech
         if (this.currentUtterance) {
           speechSynthesis.cancel();
+          this.resetAllButtons();
+          this.clearHighlight();
           this.currentUtterance = null;
         }
         
         // Reset observed comments
         this.observedComments.clear();
+        this.textNodesMap = [];
         
         // Reinitialize if we're still on a video page
         if (window.location.pathname === '/watch') {
